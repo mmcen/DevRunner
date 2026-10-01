@@ -46,13 +46,21 @@ python3 -c "import django; print('django:', django.VERSION)"  # (5, 2, 10, 'fina
 python3 -c "import scrapy; print('scrapy:', scrapy.__version__)"  # 2.14.1
 ```
 
-### Integrated autostart services (supervisord)
-The devbox image boots under supervisord (the MonkeyCode Firecracker platform cannot run systemd, see `devbox-guide.md`) and autostarts two services:
+### Integrated autostart services
+The platform does not reliably run the image CMD, so services are managed by plain **sysvinit scripts** (`/etc/init.d/{ssh,tun,sbox}` — the same `service ...` verbs the platform suggests) with three autostart triggers:
 
-- **sshd** — listens on port `2222`; root login is public-key only (`PermitRootLogin prohibit-password`, password auth disabled). The authorized key is baked in at `docker/devbox/bookworm/authorized_keys`; SSH host keys are generated at build time so they persist across environment rebuilds.
-- **tun** — Cloudflare Tunnel connector (sing-box embedded cloudflared, installed by the vendored `tun.sh`), started with the default token baked in at build (`ARG TUN_TOKEN`, written to `/etc/tun/token` and `/etc/tun/env`). Manage it inside the box with `tun start|stop|status|token <TOKEN>`.
+1. Image CMD → `devbox-autostart --watchdog`: starts all services at boot and revives any that die (checks every 20s).
+2. Shell-login hooks (`/etc/profile.d/00-devbox-autostart.sh`, `~/.zshrc`, `~/.bashrc`) → `devbox-autostart`: fires on the first terminal login even when the platform overrides the CMD, and spawns the watchdog if it is not running.
+3. Manual: `service ssh|tun|sbox start|stop|restart|status`.
 
-Logs: `/var/log/supervisor/{sshd,tun}.{log,err}` and `/var/log/supervisor/supervisord.log`. Interactive use (`docker run ... bash`) overrides `CMD` and skips the services, same as on the platform.
+Services and tools:
+
+- **sshd** — port `2222`, root login public-key only (`PermitRootLogin prohibit-password`, password auth disabled). The authorized key is baked in at `docker/devbox/bookworm/authorized_keys`; settings live in the **main** `/etc/ssh/sshd_config` so `sshx` reads/edits them correctly; host keys are generated at build time so they persist across rebuilds.
+- **tun** — Cloudflare Tunnel connector (sing-box embedded cloudflared, installed by vendored `tun.sh`), default token baked in at build (`ARG TUN_TOKEN`, written to `/etc/tun/token` and `/etc/tun/env`). Manage with `service tun ...` or the `tun` menu command.
+- **sbox** — sing-box node manager (vendored `sbox.sh`, non-interactive install). `sbox` opens the management menu; its start/stop/status route through `/etc/init.d/sbox` automatically.
+- **sshx** — SSH management menu (vendored `ssh.sh`, patched so service control falls back to `service`/init.d on hosts without a running systemd).
+
+Note: if the platform overrides the image CMD, services start on the **first shell login** (open the web terminal once); after that SSH and the tunnel stay up, the watchdog keeps them alive. Watchdog log: `/var/log/devbox-autostart.log`.
 
 ## Frontend image (node20)
 - Dockerfile: `docker/frontend/node20/Dockerfile` (extends base image with Node.js 20 and Corepack for frontend tooling).

@@ -1,0 +1,72 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          tun
+# Required-Start:    $network $remote_fs
+# Required-Stop:     $network $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Cloudflare Tunnel connector (tun)
+# Description:       Cloudflare Tunnel connector installed by tun.sh
+#                    (sing-box embedded cloudflared), token from /etc/tun/env.
+#                    Pidfile/log paths match the `tun` manager's manual mode
+#                    so both control paths stay consistent.
+### END INIT INFO
+
+DAEMON=/usr/local/lib/tun/tun
+PIDFILE=/run/tun.pid
+LOGFILE=/var/log/tun.log
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+[ -r /etc/tun/env ] && . /etc/tun/env
+export CF_TUNNEL_TOKEN
+
+[ -x "$DAEMON" ] || { echo "tun: $DAEMON not installed"; exit 0; }
+
+is_running() {
+    [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+case "$1" in
+    start)
+        if is_running; then exit 0; fi
+        start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+            --startas /bin/sh -- -c "exec $DAEMON run >>$LOGFILE 2>&1"
+        sleep 1
+        is_running || { echo "tun failed to start, see $LOGFILE"; exit 1; }
+        ;;
+    stop)
+        if is_running; then
+            pid=$(cat "$PIDFILE")
+            kill "$pid" 2>/dev/null
+            i=0
+            while [ $i -lt 20 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.3; i=$((i+1)); done
+            kill -9 "$pid" 2>/dev/null
+            rm -f "$PIDFILE"
+        else
+            rm -f "$PIDFILE"
+        fi
+        ;;
+    restart)
+        "$0" stop
+        sleep 1
+        "$0" start
+        ;;
+    status)
+        if is_running; then
+            echo "tun running (pid $(cat "$PIDFILE"))"
+        else
+            echo "tun stopped"
+            exit 3
+        fi
+        ;;
+    enable|disable)
+        exit 0
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}" >&2
+        exit 1
+        ;;
+esac
+exit 0

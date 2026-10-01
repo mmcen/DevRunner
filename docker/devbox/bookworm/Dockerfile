@@ -68,26 +68,37 @@ ENV NODE_VERSION=${NODE_VERSION}
 WORKDIR /workspace
 
 # ---------------------------------------------------------------------------
-# Autostarted services, kept alive by supervisord (the image CMD).
-# The MonkeyCode Firecracker platform cannot run systemd (PID 1 is the
-# platform-injected /firecracker-init), so a pure process manager is used;
-# see devbox-guide.md. Services:
-#   * sshd on port 2222 — root login restricted to the baked-in public key
-#   * tun — Cloudflare Tunnel connector, default token baked in at build
+# Autostarted services. The MonkeyCode Firecracker platform may not run the
+# image CMD (observed in practice), so services are managed by plain sysvinit
+# scripts — the same `service ...` verbs the platform and the bundled menu
+# tools use — with three start triggers:
+#   1. image CMD -> devbox-autostart --watchdog (starts services, revives them)
+#   2. shell login hooks (/etc/profile.d, ~/.zshrc, ~/.bashrc) ->
+#      devbox-autostart (fires even when the platform overrides the CMD)
+#   3. `service ssh|tun|sbox start` at any time
+# Services:
+#   * sshd on port 2222 — root login restricted to the baked-in public key;
+#     settings baked into the MAIN sshd_config so `sshx` reads/edits them
+#   * tun — Cloudflare Tunnel connector (vendored tun.sh, default token)
+#   * sbox — sing-box node manager (vendored sbox.sh, `sbox` menu command)
+#   * sshx — SSH management menu (vendored ssh.sh, adapted for no-systemd)
 # ---------------------------------------------------------------------------
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         openssh-server \
+        jq \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /run/sshd /root/.ssh /etc/supervisor /var/log/supervisor \
+    && mkdir -p /run/sshd /root/.ssh \
     && ssh-keygen -A
 
-COPY docker/devbox/bookworm/sshd-devbox.conf /etc/ssh/sshd_config.d/00-devbox.conf
 COPY docker/devbox/bookworm/authorized_keys /root/.ssh/authorized_keys
 RUN chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
 
-RUN pip3 install --no-cache-dir --break-system-packages supervisor
+# sshd first-match wins, so put our values in the main config (after the
+# stock directives) rather than in an sshd_config.d drop-in
+COPY docker/devbox/bookworm/sshd-devbox.conf /tmp/sshd-extra.conf
+RUN cat /tmp/sshd-extra.conf >> /etc/ssh/sshd_config && rm -f /tmp/sshd-extra.conf
 
 # Fixed default tunnel token; override at build time with --build-arg TUN_TOKEN=...
 ARG TUN_TOKEN=eyJhIjoiNDNjYjI4NGVjMDY5NWM1NDc0ZTczMzE4YWNkYzcxYzAiLCJ0IjoiMTE5YzZjMDMtN2Q1ZS00NDQyLWI0YjEtNDY2NzBhOWUwODU5IiwicyI6Ik9UTmhOMlptWm1VdE4yRTVNaTAwWm1RekxUZ3dNRGN0T1RVeU5EWTVPRE5tT0ROaCJ9
@@ -99,8 +110,29 @@ RUN set -eux; \
     test -x /usr/local/lib/tun/tun; \
     grep -q '^CF_TUNNEL_TOKEN=' /etc/tun/env
 
-COPY docker/devbox/bookworm/tun-run.sh /usr/local/bin/tun-run
-COPY docker/devbox/bookworm/supervisord.conf /etc/supervisor/supervisord.conf
-RUN chmod 755 /usr/local/bin/tun-run
+# sbox: sing-box node manager (non-interactive install; menu command `sbox`)
+COPY docker/devbox/bookworm/sbox.sh /tmp/sbox.sh
+RUN set -eux; \
+    bash /tmp/sbox.sh; \
+    rm -f /tmp/sbox.sh; \
+    test -x /opt/sbox/sbox; \
+    test -x /usr/local/bin/sbox; \
+    test -s /etc/sbox/config.json
 
-CMD ["/usr/local/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+# sshx: SSH management menu (vendored ssh.sh, patched for no-systemd hosts)
+COPY docker/devbox/bookworm/ssh.sh /usr/local/bin/sshx
+RUN chmod 755 /usr/local/bin/sshx
+
+# sysvinit scripts + autostart bootstrap/watchdog + shell-login hooks
+COPY docker/devbox/bookworm/init.d-tun /etc/init.d/tun
+COPY docker/devbox/bookworm/init.d-sbox /etc/init.d/sbox
+COPY docker/devbox/bookworm/devbox-autostart /usr/local/bin/devbox-autostart
+COPY docker/devbox/bookworm/profile-hook.sh /etc/profile.d/00-devbox-autostart.sh
+COPY docker/devbox/bookworm/shellrc-hook.sh /tmp/shellrc-hook.sh
+RUN chmod 755 /etc/init.d/tun /etc/init.d/sbox /usr/local/bin/devbox-autostart \
+    && chmod 644 /etc/profile.d/00-devbox-autostart.sh \
+    && cat /tmp/shellrc-hook.sh >> /root/.bashrc \
+    && cat /tmp/shellrc-hook.sh >> /root/.zshrc \
+    && rm -f /tmp/shellrc-hook.sh
+
+CMD ["/usr/local/bin/devbox-autostart", "--watchdog"]

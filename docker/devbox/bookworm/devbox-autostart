@@ -1,0 +1,58 @@
+#!/bin/sh
+# DevRunner devbox service bootstrap & watchdog.
+#
+# Starts the bundled services (sshd on 2222, tun tunnel, sbox) through their
+# sysvinit scripts, which are idempotent. Two invocation modes:
+#
+#   devbox-autostart --watchdog   foreground loop, used as the image CMD:
+#                                 starts everything, then restarts any service
+#                                 that dies every 20s.
+#   devbox-autostart              one-shot, used from shell profile hooks:
+#                                 starts everything once and spawns the
+#                                 watchdog in the background if not running.
+#
+# All paths are defensive: the platform overrides image ENV/PATH, and may not
+# run the image CMD at all, so every trigger must be safe to run repeatedly.
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+SERVICES="ssh tun sbox"
+PIDFILE=/run/devbox-watchdog.pid
+LOG=/var/log/devbox-autostart.log
+
+log() { echo "$(date -Is) $*" >>"$LOG" 2>/dev/null; }
+
+start_all() {
+    for s in $SERVICES; do
+        out=$(service "$s" start 2>&1)
+        rc=$?
+        if [ "$rc" -ne 0 ] || [ -n "$out" ]; then
+            log "service $s start rc=$rc ${out:+| $out}"
+        fi
+    done
+}
+
+watchdog_running() {
+    [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+case "$1" in
+    --watchdog)
+        # atomic guard: exactly one watchdog proceeds even if several
+        # one-shot invocations race on shell-login
+        mkdir /run/.devbox-watchdog.lock 2>/dev/null || exit 0
+        echo $$ >"$PIDFILE" 2>/dev/null
+        log "watchdog started (pid $$)"
+        while :; do
+            sleep 20
+            start_all
+        done
+        ;;
+    *)
+        start_all
+        if ! watchdog_running; then
+            setsid "$0" --watchdog >/dev/null 2>&1 </dev/null &
+        fi
+        ;;
+esac
