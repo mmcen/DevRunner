@@ -12,7 +12,9 @@ on:
     tags: ["*"]
 
 env:
-  REGISTRY: ghcr.io/chaitin/monkeycode-runner
+  # Registry follows the repository owner so forks build and push their own
+  # images (ghcr.io/<owner>/monkeycode-runner/<stack>); upstream stays unchanged.
+  REGISTRY: ghcr.io/${{ github.repository_owner }}/monkeycode-runner
   # Default to TUNA mirrors (optimized for mainland China/Asia). You can override these
   # per repo/org by defining GitHub variables DEBIAN_MIRROR and DEBIAN_SECURITY_MIRROR
   # if runners are primarily located elsewhere and builds are slow.

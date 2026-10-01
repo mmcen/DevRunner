@@ -66,3 +66,41 @@ RUN pip3 install --no-cache-dir \
 ENV NODE_VERSION=${NODE_VERSION}
 
 WORKDIR /workspace
+
+# ---------------------------------------------------------------------------
+# Autostarted services, kept alive by supervisord (the image CMD).
+# The MonkeyCode Firecracker platform cannot run systemd (PID 1 is the
+# platform-injected /firecracker-init), so a pure process manager is used;
+# see devbox-guide.md. Services:
+#   * sshd on port 2222 — root login restricted to the baked-in public key
+#   * tun — Cloudflare Tunnel connector, default token baked in at build
+# ---------------------------------------------------------------------------
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/sshd /root/.ssh /etc/supervisor /var/log/supervisor \
+    && ssh-keygen -A
+
+COPY docker/devbox/bookworm/sshd-devbox.conf /etc/ssh/sshd_config.d/00-devbox.conf
+COPY docker/devbox/bookworm/authorized_keys /root/.ssh/authorized_keys
+RUN chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+
+RUN pip3 install --no-cache-dir --break-system-packages supervisor
+
+# Fixed default tunnel token; override at build time with --build-arg TUN_TOKEN=...
+ARG TUN_TOKEN=eyJhIjoiNDNjYjI4NGVjMDY5NWM1NDc0ZTczMzE4YWNkYzcxYzAiLCJ0IjoiMTE5YzZjMDMtN2Q1ZS00NDQyLWI0YjEtNDY2NzBhOWUwODU5IiwicyI6Ik9UTmhOMlptWm1VdE4yRTVNaTAwWm1RekxUZ3dNRGN0T1RVeU5EWTVPRE5tT0ROaCJ9
+
+COPY docker/devbox/bookworm/tun.sh /tmp/tun.sh
+RUN set -eux; \
+    sh /tmp/tun.sh --token "${TUN_TOKEN}" --no-start; \
+    rm -f /tmp/tun.sh; \
+    test -x /usr/local/lib/tun/tun; \
+    grep -q '^CF_TUNNEL_TOKEN=' /etc/tun/env
+
+COPY docker/devbox/bookworm/tun-run.sh /usr/local/bin/tun-run
+COPY docker/devbox/bookworm/supervisord.conf /etc/supervisor/supervisord.conf
+RUN chmod 755 /usr/local/bin/tun-run
+
+CMD ["/usr/local/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]

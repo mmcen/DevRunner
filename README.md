@@ -46,6 +46,14 @@ python3 -c "import django; print('django:', django.VERSION)"  # (5, 2, 10, 'fina
 python3 -c "import scrapy; print('scrapy:', scrapy.__version__)"  # 2.14.1
 ```
 
+### Integrated autostart services (supervisord)
+The devbox image boots under supervisord (the MonkeyCode Firecracker platform cannot run systemd, see `devbox-guide.md`) and autostarts two services:
+
+- **sshd** — listens on port `2222`; root login is public-key only (`PermitRootLogin prohibit-password`, password auth disabled). The authorized key is baked in at `docker/devbox/bookworm/authorized_keys`; SSH host keys are generated at build time so they persist across environment rebuilds.
+- **tun** — Cloudflare Tunnel connector (sing-box embedded cloudflared, installed by the vendored `tun.sh`), started with the default token baked in at build (`ARG TUN_TOKEN`, written to `/etc/tun/token` and `/etc/tun/env`). Manage it inside the box with `tun start|stop|status|token <TOKEN>`.
+
+Logs: `/var/log/supervisor/{sshd,tun}.{log,err}` and `/var/log/supervisor/supervisord.log`. Interactive use (`docker run ... bash`) overrides `CMD` and skips the services, same as on the platform.
+
 ## Frontend image (node20)
 - Dockerfile: `docker/frontend/node20/Dockerfile` (extends base image with Node.js 20 and Corepack for frontend tooling).
 - Build locally: `STACK=frontend VERSION=node20 ./scripts/build.sh`
@@ -83,5 +91,5 @@ python3 -c "import scrapy; print('scrapy:', scrapy.__version__)"  # 2.14.1
 ## CI/CD
 - Workflow: `.github/workflows/ci.yaml`
   - PR: build only (no push).
-  - Push to `main` branch: login to GHCR with `GITHUB_TOKEN` and push tags from metadata (`bookworm`, `latest`, branch/tag-derived). Non-main branches/tags build only. Target registry: `ghcr.io/chaitin/monkeycode-runner`.
+  - Push to `main` branch: login to GHCR with `GITHUB_TOKEN` and push tags from metadata (`bookworm`, `latest`, branch/tag-derived). Non-main branches/tags build only. Target registry: `ghcr.io/<repo-owner>/monkeycode-runner` (follows the repository owner, so forks push their own images).
 - No personal access token needed; workflow requests `packages: write` and `contents: read` via `GITHUB_TOKEN` (ensure Actions permissions allow this if repository is restricted).
